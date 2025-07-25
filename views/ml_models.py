@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import StandardScaler, LabelEncoder, label_binarize
 from sklearn.metrics import accuracy_score, mean_squared_error, recall_score, precision_score, roc_auc_score, classification_report
 
 st.set_page_config(page_title="ML Agent App", page_icon="🤖")
@@ -33,9 +34,9 @@ def trainmodel():
     random_state = st.number_input('Random State', value=1994, step=1)
     
     models = {
-    'Logistic Regression': LogisticRegression(multi_class='auto', solver='lbfgs', max_iter=1000),
-    'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42),
-    'Support Vector Machine': SVC(kernel='rbf', probability=True),
+    'Logistic Regression': LogisticRegression(multi_class='auto', solver='lbfgs', max_iter=1000, class_weight='balanced'),
+    'Random Forest': RandomForestClassifier(n_estimators=100, class_weight='balanced'),
+    'Support Vector Machine': SVC(kernel='rbf', probability=True, class_weight='balanced'),
     'K-Nearest Neighbors': KNeighborsClassifier(n_neighbors=5)
 }
     
@@ -45,7 +46,7 @@ def trainmodel():
         if not selected_models:
             st.error('Please select atlest one model')
         else:
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size/100, random_state=random_state)
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size/100, random_state=random_state, stratify=y)
             
             scaler = StandardScaler()
             X_train = scaler.fit_transform(X_train)
@@ -71,21 +72,45 @@ def trainmodel():
 def visual(model_name, model, X_test, y_test):
     st.subheader(f'{model_name}')
     y_pred = model.predict(X_test)
-    
     accuracy = accuracy_score(y_test, y_pred)
-    recall = recall_score(y_test, y_pred)
-    precision = precision_score(y_test, y_pred)
+    recall = recall_score(y_test, y_pred, average='weighted')
+    precision = precision_score(y_test, y_pred, average='weighted')
     mse = mean_squared_error(y_test, y_pred)
-    auc = roc_auc_score(y_test, y_pred)
+    
+    auc = None
+    if hasattr(model, "predict_proba"):
+        try:
+            y_proba = model.predict_proba(X_test)
+            if hasattr(model, 'classes_'):
+                classes = model.classes_
+            else:
+                classes = np.unique(y_test)
+            # Multiclass
+            if len(classes) > 2:
+                y_test_bin = label_binarize(y_test, classes=classes)
+
+                if y_proba.shape[1] == len(classes):
+                    auc = roc_auc_score(y_test_bin, y_proba, multi_class='ovr', average='macro')
+                else:
+                    st.warning(f"⚠️ Shape mismatch: y_proba.shape = {y_proba.shape}, expected = ({len(y_test)}, {len(classes)})")
+            else:
+                # Binary
+                if y_proba.shape[1] >= 2:
+                    auc = roc_auc_score(y_test, y_proba[:, 1])
+                else:
+                    st.warning("⚠️ y_proba does not have at least 2 columns for binary AUC.")
+        except Exception as e:
+            st.warning(f"⚠️ Error computing AUC: {e}")
+    # Classification report
     report = classification_report(y_test, y_pred, output_dict=True)
     df_report = pd.DataFrame(report).transpose()
-    
-    st.write(f'**accuracy:** {accuracy:.2f}')
-    st.write(f'**recall:** {recall:.2f}')
-    st.write(f'**precision:** {precision:.2f}')
-    st.write(f'**mse:** {mse:.2f}')
-    st.write(f'**auc:** {auc:.2f}')
-    st.write('**classification report: **')
+
+    st.write(f'**Accuracy:** {accuracy:.2f}')
+    st.write(f'**Recall:** {recall:.2f}')
+    st.write(f'**Precision:** {precision:.2f}')
+    st.write(f'**MSE:** {mse:.2f}')
+    st.write(f'**AUC:** {auc:.2f}' if auc is not None else '**AUC:** N/A')
+    st.write('**Classification Report:**')
     st.dataframe(df_report.style.format("{:.2f}"))
 
 def main():
